@@ -16,7 +16,7 @@
  * 26  ks_burst_ratio          rapid-succession keystrokes / total transitions
  */
 
-import type { RawKeyEvent } from './types.js';
+import type { RawKeyEvent } from '../types.js';
 
 // ── Math helpers ──────────────────────────────────────────────────────────────
 

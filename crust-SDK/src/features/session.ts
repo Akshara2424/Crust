@@ -16,7 +16,7 @@
  * 34  sess_total_duration            total session length (ms)
  */
 
-import type { RawScrollEvent, RawSessionEvent } from './types.js';
+import type { RawScrollEvent, RawSessionEvent } from '../types.js';
 
 // ── Math helpers ──────────────────────────────────────────────────────────────
 

@@ -19,7 +19,7 @@
  * 18  mouse_fitts_adherence
  */
 
-import type { RawMouseEvent } from './types.js';
+import type { RawMouseEvent } from '../types.js';
 
 // ── Math helpers ──────────────────────────────────────────────────────────────
 

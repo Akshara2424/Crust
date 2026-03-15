@@ -13,11 +13,11 @@
 
 /// <reference lib="webworker" />
 
-import { collectEnvironmentFeatures }  from './environment.js';
-import { MouseCollector }              from './mouse.js';
-import { KeystrokeCollector }          from './keystroke.js';
-import { SessionCollector }            from './session.js';
-import { collectNetworkFeatures }      from './network.js';
+import { collectEnvironmentFeatures }  from './features/environment.js';
+import { MouseCollector }              from './features/mouse.js';
+import { KeystrokeCollector }          from './features/keystroke.js';
+import { SessionCollector }            from './features/session.js';
+import { collectNetworkFeatures }      from './features/network.js';
 import type {
   CrustConfig,
   FeatureVector,

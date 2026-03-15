@@ -32,6 +32,6 @@
     "resolveJsonModule":          true,
     "isolatedModules":            true
   },
-  "include": ["*.ts"],
+  "include": ["*.ts", "crust-SDK/src/index.ts", "crust-SDK/src/worker.ts", "crust-SDK/src/toppings-stub.ts", "crust-SDK/src/types.ts", "crust-SDK/src/features/mouse.ts", "crust-SDK/src/features/environment.ts", "crust-SDK/src/features/keystroke.ts", "crust-SDK/src/features/session.ts", "crust-SDK/src/features/network.ts"],
   "exclude": ["node_modules", "dist"]
 }
