@@ -55,7 +55,7 @@ const base = {
 async function buildWorkerBlob() {
   const result = await esbuild.build({
     ...base,
-    entryPoints: ['worker.ts'],
+    entryPoints: ['crust-SDK/src/worker.ts'],
     format:      'iife',
     globalName:  '__crustWorkerInit',
     write:       false,
@@ -73,7 +73,7 @@ async function buildWorkerBlob() {
 async function buildEsm() {
   await esbuild.build({
     ...base,
-    entryPoints: ['index.ts'],
+    entryPoints: ['crust-SDK/src/index.ts'],
     format:      'esm',
     splitting:   false,
     outfile:     'dist/index.js',
@@ -87,7 +87,7 @@ async function buildEsm() {
 async function buildIife(workerShim) {
   await esbuild.build({
     ...base,
-    entryPoints: ['index.ts'],
+    entryPoints: ['crust-SDK/src/index.ts'],
     format:      'iife',
     globalName:  '__CRUST_SDK_UNUSED',  // window.CRUST set internally
     outfile:     'dist/crust.iife.js',
@@ -148,7 +148,7 @@ async function main() {
     // Watch mode: rebuild ESM on change (IIFE skipped for speed)
     const ctx = await esbuild.context({
       ...base,
-      entryPoints: ['index.ts'],
+      entryPoints: ['crust-SDK/src/index.ts'],
       format:      'esm',
       outfile:     'dist/index.js',
     });
