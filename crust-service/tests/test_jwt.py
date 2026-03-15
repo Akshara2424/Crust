@@ -12,8 +12,8 @@ import time
 import pytest
 from jose import jwt as jose_jwt
 
-from jwt_utils import CrustJWTError, hash_feature_vector, sign_jwt, verify_jwt
-from models import DecisionEnum
+from app.jwt_utils import CrustJWTError, hash_feature_vector, sign_jwt, verify_jwt
+from app.schemas import DecisionEnum
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

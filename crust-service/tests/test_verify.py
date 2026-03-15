@@ -18,8 +18,8 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 
-from jwt_utils import verify_jwt
-from models import DecisionEnum
+from app.jwt_utils import verify_jwt
+from app.schemas import DecisionEnum
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

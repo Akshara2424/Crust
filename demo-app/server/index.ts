@@ -7,6 +7,7 @@ import { authRouter }     from './routes/auth';
 import { checkoutRouter } from './routes/checkout';
 import { configRouter }   from './routes/config';
 
+
 // ── Validate required env ─────────────────────────────────────────────────────
 
 const PUBLIC_KEY_PEM   = process.env.CRUST_PUBLIC_KEY_PEM;

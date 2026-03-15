@@ -14,8 +14,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from config import Settings, get_settings
 from inference import CrustModel
-from jwt_utils import sign_jwt
-from models import DecisionEnum, VerifyRequest, VerifyResponse
+from ..jwt_utils import sign_jwt
+from ..schemas import DecisionEnum, VerifyRequest, VerifyResponse
 from rate_limit import limiter
 from thresholds import clamp_confidence, confidence_to_decision
 

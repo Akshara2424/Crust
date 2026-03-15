@@ -18,8 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from config import Settings, get_settings
 from inference import CrustModel
-from jwt_utils import CrustJWTError, sign_jwt, verify_jwt
-from models import (
+from ..jwt_utils import CrustJWTError, sign_jwt, verify_jwt
+from ..schemas import (
     ChallengeOrderResponse,
     ChallengeResultRequest,
     ChallengeResultResponse,

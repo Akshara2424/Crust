@@ -25,7 +25,7 @@ from typing import Any
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError, JWTClaimsError
 
-from models import DecisionEnum
+from .schemas import DecisionEnum
 
 _ALGORITHM = "RS256"
 _EXPECTED_ISS = "crust-verification-service"

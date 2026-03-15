@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from models import DecisionEnum
+from app.schemas import DecisionEnum
 from thresholds import clamp_confidence, confidence_to_decision
 
 

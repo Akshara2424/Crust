@@ -12,7 +12,7 @@ from fastapi.responses import PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
 from config import get_settings
-from models import HealthResponse
+from ..schemas import HealthResponse
 
 router = APIRouter(tags=["observability"])
 

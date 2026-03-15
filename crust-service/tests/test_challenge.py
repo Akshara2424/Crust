@@ -20,8 +20,8 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 
-from jwt_utils import sign_jwt
-from models import DecisionEnum
+from app.jwt_utils import sign_jwt
+from app.schemas import DecisionEnum
 
 ORDER_URL  = "/api/crust/challenge/order"
 RESULT_URL = "/api/crust/challenge/result"
@@ -386,8 +386,8 @@ async def test_fast_solve_boosts_confidence(
     A fast correct solve (elapsed < 20 s) should add +0.15 to base confidence.
     We verify the returned confidence is >= the base score.
     """
-    from inference import CrustModel
-    from jwt_utils import verify_jwt as _verify
+    from app.inference import CrustModel
+    from app.jwt_utils import verify_jwt as _verify
 
     order_resp = await app_client.post(ORDER_URL)
     order = order_resp.json()

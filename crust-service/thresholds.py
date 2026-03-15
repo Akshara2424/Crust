@@ -8,7 +8,7 @@ via environment variables without touching code.
 
 from __future__ import annotations
 
-from models import DecisionEnum
+from app.schemas import DecisionEnum
 
 
 def confidence_to_decision(

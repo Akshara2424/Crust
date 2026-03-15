@@ -1,10 +1,6 @@
 """
 CRUST Verification Service — Pydantic v2 request / response schemas.
-
-All 40-float feature vectors use a fixed-length list with bounds checking.
-All responses carry a correlation ID passed via the x-crust-request-id header.
 """
-
 from __future__ import annotations
 
 from enum import Enum
@@ -14,16 +10,12 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 
 
-# ── Decision enum ─────────────────────────────────────────────────────────────
-
 class DecisionEnum(str, Enum):
     PASS           = "PASS"
     SOFT_CHALLENGE = "SOFT_CHALLENGE"
     HARD_CHALLENGE = "HARD_CHALLENGE"
     BLOCK          = "BLOCK"
 
-
-# ── Feature vector type ───────────────────────────────────────────────────────
 
 FeatureVector40 = Annotated[
     list[float],
@@ -35,8 +27,6 @@ FeatureVector48 = Annotated[
     Field(min_length=48, max_length=48, description="Exactly 48 floats (40 + 8 game signals)"),
 ]
 
-
-# ── /verify ───────────────────────────────────────────────────────────────────
 
 class VerifyRequest(BaseModel):
     feature_vector: FeatureVector40
@@ -50,26 +40,22 @@ class VerifyRequest(BaseModel):
 
 
 class VerifyResponse(BaseModel):
-    jwt: str
+    jwt:        str
     confidence: float = Field(ge=0.0, le=1.0)
-    decision: DecisionEnum
+    decision:   DecisionEnum
 
-
-# ── /challenge/order ──────────────────────────────────────────────────────────
 
 class ChallengeOrderResponse(BaseModel):
-    order_id: UUID
-    base: str
-    sauce: str
-    toppings: list[str]
-    expires_at: str  # ISO 8601 datetime string
+    order_id:   UUID
+    base:       str
+    sauce:      str
+    toppings:   list[str]
+    expires_at: str
 
-
-# ── /challenge/result ─────────────────────────────────────────────────────────
 
 class SubmittedOrder(BaseModel):
-    base: str
-    sauce: str
+    base:     str
+    sauce:    str
     toppings: list[str]
 
 
@@ -84,7 +70,6 @@ class GameSignals(BaseModel):
     interaction_entropy:      float = Field(ge=0.0)
 
     def to_vector(self) -> list[float]:
-        """Return signals in the canonical fixed order (dims 41–48)."""
         return [
             self.drag_velocity_mean,
             self.placement_hesitation_ms,
@@ -98,37 +83,31 @@ class GameSignals(BaseModel):
 
 
 class ChallengeResultRequest(BaseModel):
-    jwt: str
-    order_id: UUID
-    submitted: SubmittedOrder
-    game_signals: GameSignals
+    jwt:                    str
+    order_id:               UUID
+    submitted:              SubmittedOrder
+    game_signals:           GameSignals
     original_feature_vector: FeatureVector40
 
     @field_validator("original_feature_vector")
     @classmethod
     def validate_fv_length(cls, v: list[float]) -> list[float]:
         if len(v) != 40:
-            raise ValueError(
-                f"original_feature_vector must have exactly 40 elements, got {len(v)}"
-            )
+            raise ValueError(f"original_feature_vector must have exactly 40 elements, got {len(v)}")
         return v
 
 
 class ChallengeResultResponse(BaseModel):
-    jwt: str
+    jwt:        str
     confidence: float = Field(ge=0.0, le=1.0)
-    decision: DecisionEnum
+    decision:   DecisionEnum
 
-
-# ── Error responses ───────────────────────────────────────────────────────────
 
 class ErrorResponse(BaseModel):
-    error: str
+    error:  str
     detail: str | None = None
 
 
-# ── /health ───────────────────────────────────────────────────────────────────
-
 class HealthResponse(BaseModel):
-    status: str
+    status:        str
     model_version: str

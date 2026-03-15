@@ -26,9 +26,9 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from config import get_settings
 from inference import load_model
-from models import DecisionEnum, VerifyRequest, VerifyResponse, ChallengeOrderResponse, ChallengeResultRequest
+from .schemas import DecisionEnum, VerifyRequest, VerifyResponse, ChallengeOrderResponse, ChallengeResultRequest
 from rate_limit import limiter, rate_limit_exceeded_handler
-from routers import challenge, health, verify
+from .routers import challenge, health, verify
 
 
 # ── Structured JSON logging ───────────────────────────────────────────────────
