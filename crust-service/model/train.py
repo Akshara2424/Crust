@@ -1,274 +1,234 @@
 """
-CRUST — Model training script.
+CRUST — XGBoost model trainer.
 
-Run once to generate model/crust_model.json:
+Generates synthetic human vs. bot training data based on the
+40-feature vector specification, trains an XGBoost classifier,
+and writes the model to model/crust_model.json.
 
+Usage:
+    cd crust-service
     python model/train.py
 
-Synthetic data is generated to approximate the statistical profile of real
-browser sessions (human) versus Selenium/Puppeteer/scripted bots.
-
-Feature order matches the SDK FeatureVector spec exactly (40 dims).
+The synthetic data is intentionally simple — replace with real
+shadow-mode traffic logs before any production deployment.
 """
-
 from __future__ import annotations
 
+import json
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
-from sklearn.model_selection import train_test_split
 
-# Allow running from the repo root or from inside model/
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# ── Feature index reference (0-based) ─────────────────────────────────────────
+# 0–7   Environment: webdriver_flag, canvas_hash, plugin_count,
+#                    language_mismatch, screen_depth, timezone_offset,
+#                    touch_support, devtools_open
+# 8–17  Mouse: trajectory_linearity, avg_velocity, velocity_variance,
+#              curvature_mean, pause_count, overshoot_count,
+#              click_pressure_variance, event_count, idle_ratio, fitts_adherence
+# 18–25 Keystroke: iki_mean, iki_variance, hold_time_mean, hold_time_variance,
+#                  bigram_consistency, event_count, backspace_ratio, burst_ratio
+# 26–33 Session: first_interaction_delay, focus_switches, tab_hidden_duration,
+#                scroll_velocity_mean, scroll_direction_reversals,
+#                form_focus_count, copy_paste_detected, total_duration
+# 34–39 Network: request_jitter, ja3_fingerprint, connection_type,
+#                rtt_estimate, downlink_estimate, preflight_timing
 
-import xgboost as xgb  # noqa: E402
+N_FEATURES = 40
+N_HUMAN    = 8_000
+N_BOT      = 2_000
+RANDOM_SEED = 42
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-
-SEED          = 42
-N_HUMAN       = 10_000
-N_BOT         = 5_000
-OUTPUT_PATH   = os.path.join(os.path.dirname(__file__), "crust_model.json")
-
-# Feature names — used for column ordering and any downstream inspection
-FEATURE_NAMES: list[str] = [
-    # Environment (1–8)
-    "env_webdriver_flag", "env_canvas_hash", "env_plugin_count",
-    "env_language_mismatch", "env_screen_depth", "env_timezone_offset",
-    "env_touch_support", "env_devtools_open",
-    # Mouse (9–18)
-    "mouse_trajectory_linearity", "mouse_avg_velocity", "mouse_velocity_variance",
-    "mouse_curvature_mean", "mouse_pause_count", "mouse_overshoot_count",
-    "mouse_click_pressure_variance", "mouse_event_count",
-    "mouse_idle_ratio", "mouse_fitts_adherence",
-    # Keystroke (19–26)
-    "ks_iki_mean", "ks_iki_variance", "ks_hold_time_mean", "ks_hold_time_variance",
-    "ks_bigram_consistency", "ks_event_count", "ks_backspace_ratio", "ks_burst_ratio",
-    # Session (27–34)
-    "sess_first_interaction_delay", "sess_focus_switches", "sess_tab_hidden_duration",
-    "sess_scroll_velocity_mean", "sess_scroll_direction_reversals",
-    "sess_form_focus_count", "sess_copy_paste_detected", "sess_total_duration",
-    # Network (35–40)
-    "net_request_jitter", "net_ja3_fingerprint", "net_connection_type",
-    "net_rtt_estimate", "net_downlink_estimate", "net_preflight_timing",
-]
-
-assert len(FEATURE_NAMES) == 40, "Feature name list must have exactly 40 entries"
-
-
-# ── Synthetic data generation ─────────────────────────────────────────────────
 
 def generate_human_samples(n: int, rng: np.random.Generator) -> np.ndarray:
-    """Generate n synthetic human browser sessions (label = 1)."""
-    rows: list[np.ndarray] = []
+    """Simulate realistic human browser signals."""
+    samples = np.zeros((n, N_FEATURES))
 
-    for _ in range(n):
-        row = np.array([
-            # env_webdriver_flag
-            rng.binomial(1, 0.01),
-            # env_canvas_hash
-            rng.uniform(0.0, 1.0),
-            # env_plugin_count (Poisson(5) / 20, clipped)
-            min(rng.poisson(5), 20) / 20.0,
-            # env_language_mismatch
-            rng.binomial(1, 0.05),
-            # env_screen_depth: 24 → 24/32, 32 → 1.0
-            rng.choice([24.0, 32.0]) / 32.0,
-            # env_timezone_offset: map (−720,720) → (0,1)
-            (rng.uniform(-720.0, 720.0) + 720.0) / 1440.0,
-            # env_touch_support
-            rng.binomial(1, 0.45),
-            # env_devtools_open
-            rng.binomial(1, 0.02),
-            # mouse_trajectory_linearity — Beta(8,2), humans curve naturally
-            rng.beta(8, 2),
-            # mouse_avg_velocity — LogNormal(2.5, 0.4), /3 to normalise ≤ 1
-            min(rng.lognormal(2.5, 0.4) / 3.0, 1.0),
-            # mouse_velocity_variance — LogNormal(1.0, 0.5), /9
-            min(rng.lognormal(1.0, 0.5) / 9.0, 1.0),
-            # mouse_curvature_mean — Beta(3,5)
-            rng.beta(3, 5),
-            # mouse_pause_count — Poisson(3)/20
-            min(rng.poisson(3), 20) / 20.0,
-            # mouse_overshoot_count — Poisson(1)/10
-            min(rng.poisson(1), 10) / 10.0,
-            # mouse_click_pressure_variance — Beta(2,5)
-            rng.beta(2, 5),
-            # mouse_event_count — Poisson(120)/2000
-            min(rng.poisson(120), 2000) / 2000.0,
-            # mouse_idle_ratio — Beta(2,5)
-            rng.beta(2, 5),
-            # mouse_fitts_adherence — Beta(7,2)
-            rng.beta(7, 2),
-            # ks_iki_mean — LogNormal(log(180), 0.4)/500
-            min(rng.lognormal(np.log(180), 0.4) / 500.0, 1.0),
-            # ks_iki_variance — LogNormal(log(3000), 0.5)/250000
-            min(rng.lognormal(np.log(3000), 0.5) / 250_000.0, 1.0),
-            # ks_hold_time_mean — LogNormal(log(100), 0.3)/300
-            min(rng.lognormal(np.log(100), 0.3) / 300.0, 1.0),
-            # ks_hold_time_variance — LogNormal(log(500), 0.4)/90000
-            min(rng.lognormal(np.log(500), 0.4) / 90_000.0, 1.0),
-            # ks_bigram_consistency — Beta(6,2)
-            rng.beta(6, 2),
-            # ks_event_count — Poisson(40)/500
-            min(rng.poisson(40), 500) / 500.0,
-            # ks_backspace_ratio — Beta(2,10)
-            rng.beta(2, 10),
-            # ks_burst_ratio — Beta(2,8)
-            rng.beta(2, 8),
-            # sess_first_interaction_delay — LogNormal(log(800), 0.5)/30000
-            min(rng.lognormal(np.log(800), 0.5) / 30_000.0, 1.0),
-            # sess_focus_switches — Poisson(1)/20
-            min(rng.poisson(1), 20) / 20.0,
-            # sess_tab_hidden_duration — Exponential(scale=2000)/120000
-            min(rng.exponential(2000) / 120_000.0, 1.0),
-            # sess_scroll_velocity_mean — LogNormal(log(1.5), 0.4)/5
-            min(rng.lognormal(np.log(1.5), 0.4) / 5.0, 1.0),
-            # sess_scroll_direction_reversals — Poisson(2)/30
-            min(rng.poisson(2), 30) / 30.0,
-            # sess_form_focus_count — Poisson(3)/20
-            min(rng.poisson(3), 20) / 20.0,
-            # sess_copy_paste_detected
-            rng.binomial(1, 0.15),
-            # sess_total_duration — LogNormal(log(12000), 0.4)/120000
-            min(rng.lognormal(np.log(12_000), 0.4) / 120_000.0, 1.0),
-            # net_request_jitter — LogNormal(log(8), 0.5)/200
-            min(rng.lognormal(np.log(8), 0.5) / 200.0, 1.0),
-            # net_ja3_fingerprint — Uniform(0,1)
-            rng.uniform(0.0, 1.0),
-            # net_connection_type — ordinal from {3,4,5}, p=[0.1,0.3,0.6]
-            rng.choice([3.0, 4.0, 5.0], p=[0.1, 0.3, 0.6]) / 7.0,
-            # net_rtt_estimate — LogNormal(log(20), 0.5)/2000
-            min(rng.lognormal(np.log(20), 0.5) / 2_000.0, 1.0),
-            # net_downlink_estimate — LogNormal(log(15), 0.6)/100
-            min(rng.lognormal(np.log(15), 0.6) / 100.0, 1.0),
-            # net_preflight_timing — LogNormal(log(25), 0.4)/1000
-            min(rng.lognormal(np.log(25), 0.4) / 1_000.0, 1.0),
-        ], dtype=np.float32)
-        rows.append(row)
+    # Environment — humans rarely have webdriver flag or devtools open
+    samples[:, 0] = rng.choice([0, 1], size=n, p=[0.97, 0.03])   # webdriver_flag
+    samples[:, 1] = rng.uniform(0.3, 1.0, n)                      # canvas_hash (normalised)
+    samples[:, 2] = rng.integers(2, 20, n) / 20                   # plugin_count
+    samples[:, 3] = rng.choice([0, 1], size=n, p=[0.92, 0.08])   # language_mismatch
+    samples[:, 4] = rng.choice([0.75, 1.0], size=n)               # screen_depth (24/32 bit)
+    samples[:, 5] = rng.uniform(-0.5, 0.5, n)                     # timezone_offset normalised
+    samples[:, 6] = rng.choice([0, 1], size=n, p=[0.6, 0.4])     # touch_support
+    samples[:, 7] = rng.choice([0, 1], size=n, p=[0.95, 0.05])   # devtools_open
 
-    return np.stack(rows)
+    # Mouse — humans have natural variance
+    samples[:, 8]  = rng.beta(5, 2, n)                            # trajectory_linearity (high)
+    samples[:, 9]  = rng.normal(0.4, 0.15, n).clip(0.05, 1.0)    # avg_velocity
+    samples[:, 10] = rng.exponential(0.1, n).clip(0, 0.8)        # velocity_variance
+    samples[:, 11] = rng.beta(2, 5, n)                            # curvature_mean (low)
+    samples[:, 12] = rng.poisson(3, n) / 20                       # pause_count normalised
+    samples[:, 13] = rng.poisson(2, n) / 15                       # overshoot_count
+    samples[:, 14] = rng.beta(3, 5, n)                            # click_pressure_variance
+    samples[:, 15] = rng.uniform(0.3, 1.0, n)                     # event_count normalised
+    samples[:, 16] = rng.beta(2, 8, n)                            # idle_ratio (low)
+    samples[:, 17] = rng.beta(6, 2, n)                            # fitts_adherence (high)
+
+    # Keystroke — humans have natural IKI variance
+    samples[:, 18] = rng.normal(0.15, 0.05, n).clip(0.02, 0.8)   # iki_mean (seconds)
+    samples[:, 19] = rng.exponential(0.04, n).clip(0.001, 0.3)   # iki_variance
+    samples[:, 20] = rng.normal(0.08, 0.02, n).clip(0.01, 0.3)   # hold_time_mean
+    samples[:, 21] = rng.exponential(0.02, n).clip(0.001, 0.2)   # hold_time_variance
+    samples[:, 22] = rng.beta(6, 2, n)                            # bigram_consistency (high)
+    samples[:, 23] = rng.uniform(0.2, 1.0, n)                     # event_count
+    samples[:, 24] = rng.beta(2, 10, n)                           # backspace_ratio (low)
+    samples[:, 25] = rng.beta(4, 4, n)                            # burst_ratio
+
+    # Session
+    samples[:, 26] = rng.exponential(0.3, n).clip(0, 5) / 5      # first_interaction_delay
+    samples[:, 27] = rng.poisson(2, n) / 10                       # focus_switches
+    samples[:, 28] = rng.exponential(0.1, n).clip(0, 1)          # tab_hidden_duration
+    samples[:, 29] = rng.uniform(0.1, 0.8, n)                     # scroll_velocity_mean
+    samples[:, 30] = rng.poisson(3, n) / 20                       # scroll_direction_reversals
+    samples[:, 31] = rng.integers(1, 5, n) / 5                    # form_focus_count
+    samples[:, 32] = rng.choice([0, 1], size=n, p=[0.7, 0.3])    # copy_paste_detected
+    samples[:, 33] = rng.uniform(0.1, 1.0, n)                     # total_duration
+
+    # Network
+    samples[:, 34] = rng.exponential(0.05, n).clip(0, 0.5)       # request_jitter
+    samples[:, 35] = rng.uniform(0.2, 1.0, n)                     # ja3_fingerprint
+    samples[:, 36] = rng.choice([0.25, 0.5, 0.75, 1.0], size=n)  # connection_type
+    samples[:, 37] = rng.uniform(0.05, 0.5, n)                    # rtt_estimate
+    samples[:, 38] = rng.uniform(0.3, 1.0, n)                     # downlink_estimate
+    samples[:, 39] = rng.exponential(0.03, n).clip(0, 0.3)       # preflight_timing
+
+    return samples.clip(0, 1)
 
 
 def generate_bot_samples(n: int, rng: np.random.Generator) -> np.ndarray:
-    """
-    Generate n synthetic bot sessions (label = 0).
+    """Simulate bot browser signals — too perfect or clearly automated."""
+    samples = np.zeros((n, N_FEATURES))
 
-    Bot-specific features reflect Selenium/Puppeteer patterns; remaining
-    dimensions are sampled from human distributions so bots cannot be
-    trivially detected by zero-valued features alone.
-    """
-    # Start with human-like baseline for all dims, then overwrite bot dims
-    base = generate_human_samples(n, rng)
+    # Bots often have webdriver flag, no plugins, language mismatch
+    samples[:, 0] = rng.choice([0, 1], size=n, p=[0.2, 0.8])    # webdriver_flag HIGH
+    samples[:, 1] = rng.uniform(0.0, 0.3, n)                     # canvas_hash LOW
+    samples[:, 2] = rng.integers(0, 3, n) / 20                   # plugin_count very low
+    samples[:, 3] = rng.choice([0, 1], size=n, p=[0.4, 0.6])    # language_mismatch HIGH
+    samples[:, 4] = rng.choice([0.5, 0.75], size=n)              # screen_depth unusual
+    samples[:, 5] = rng.uniform(-1, 1, n)                        # timezone_offset random
+    samples[:, 6] = np.zeros(n)                                   # no touch
+    samples[:, 7] = rng.choice([0, 1], size=n, p=[0.5, 0.5])    # devtools_open HIGH
 
-    # dim 0: env_webdriver_flag — Bernoulli(0.85)
-    base[:, 0] = rng.binomial(1, 0.85, size=n).astype(np.float32)
-    # dim 1: env_canvas_hash — Uniform(0, 0.1)
-    base[:, 1] = rng.uniform(0.0, 0.1, size=n).astype(np.float32)
-    # dim 2: env_plugin_count — Poisson(0.3)/20
-    base[:, 2] = np.clip(rng.poisson(0.3, size=n), 0, 20).astype(np.float32) / 20.0
-    # dim 8: mouse_trajectory_linearity — Beta(2,8)
-    base[:, 8] = rng.beta(2, 8, size=n).astype(np.float32)
-    # dim 9: mouse_avg_velocity — Uniform(5,50)/3
-    base[:, 9] = np.clip(rng.uniform(5.0, 50.0, size=n) / 3.0, 0.0, 1.0).astype(np.float32)
-    # dim 17: mouse_fitts_adherence — Beta(1,4)
-    base[:, 17] = rng.beta(1, 4, size=n).astype(np.float32)
-    # dim 18: ks_iki_mean — Uniform(20,60)/500
-    base[:, 18] = (rng.uniform(20.0, 60.0, size=n) / 500.0).astype(np.float32)
-    # dim 19: ks_iki_variance — Uniform(0,200)/250000
-    base[:, 19] = (rng.uniform(0.0, 200.0, size=n) / 250_000.0).astype(np.float32)
-    # dim 26: sess_first_interaction_delay — Uniform(0,100)/30000
-    base[:, 26] = (rng.uniform(0.0, 100.0, size=n) / 30_000.0).astype(np.float32)
-    # dim 32: sess_copy_paste_detected — Bernoulli(0.7)
-    base[:, 32] = rng.binomial(1, 0.70, size=n).astype(np.float32)
+    # Mouse — bots move in straight lines or not at all
+    samples[:, 8]  = rng.beta(9, 1, n)                           # trajectory_linearity VERY HIGH
+    samples[:, 9]  = rng.choice([0.0, 0.9, 1.0], size=n)        # avg_velocity extreme
+    samples[:, 10] = rng.beta(1, 9, n)                           # velocity_variance VERY LOW
+    samples[:, 11] = rng.beta(1, 9, n)                           # curvature_mean VERY LOW
+    samples[:, 12] = np.zeros(n)                                  # no pauses
+    samples[:, 13] = np.zeros(n)                                  # no overshoots
+    samples[:, 14] = rng.beta(1, 9, n)                           # click_pressure_variance LOW
+    samples[:, 15] = rng.choice([0.0, 0.01, 1.0], size=n)       # event_count extreme
+    samples[:, 16] = rng.beta(8, 2, n)                           # idle_ratio HIGH
+    samples[:, 17] = rng.beta(2, 8, n)                           # fitts_adherence LOW
 
-    return base
+    # Keystroke — machine-perfect timing
+    samples[:, 18] = rng.normal(0.05, 0.001, n).clip(0.04, 0.06) # iki_mean UNIFORM
+    samples[:, 19] = rng.beta(1, 20, n)                           # iki_variance VERY LOW
+    samples[:, 20] = rng.normal(0.05, 0.001, n).clip(0.04, 0.06) # hold_time_mean uniform
+    samples[:, 21] = rng.beta(1, 20, n)                           # hold_time_variance VERY LOW
+    samples[:, 22] = rng.beta(1, 5, n)                            # bigram_consistency LOW
+    samples[:, 23] = rng.choice([0.0, 1.0], size=n)              # event_count extreme
+    samples[:, 24] = np.zeros(n)                                   # no backspaces
+    samples[:, 25] = rng.beta(9, 1, n)                            # burst_ratio HIGH
+
+    # Session — no natural browsing patterns
+    samples[:, 26] = rng.beta(1, 9, n)                           # first_interaction_delay LOW
+    samples[:, 27] = np.zeros(n)                                  # no focus switches
+    samples[:, 28] = np.zeros(n)                                  # no tab hiding
+    samples[:, 29] = rng.choice([0.0, 1.0], size=n)              # scroll_velocity extreme
+    samples[:, 30] = np.zeros(n)                                  # no scroll reversals
+    samples[:, 31] = rng.beta(1, 9, n)                           # form_focus_count LOW
+    samples[:, 32] = rng.choice([0, 1], size=n, p=[0.5, 0.5])   # copy_paste HIGH
+    samples[:, 33] = rng.beta(1, 5, n)                           # total_duration LOW
+
+    # Network — scripted requests
+    samples[:, 34] = rng.beta(1, 9, n)                           # request_jitter LOW
+    samples[:, 35] = rng.uniform(0.0, 0.2, n)                    # ja3_fingerprint LOW
+    samples[:, 36] = np.ones(n) * 0.25                           # connection_type fixed
+    samples[:, 37] = rng.beta(1, 9, n)                           # rtt_estimate very low
+    samples[:, 38] = rng.uniform(0.0, 0.2, n)                    # downlink LOW
+    samples[:, 39] = rng.beta(1, 9, n)                           # preflight_timing LOW
+
+    return samples.clip(0, 1)
 
 
-# ── Training pipeline ─────────────────────────────────────────────────────────
+def train(output_path: Path) -> None:
+    try:
+        import xgboost as xgb
+    except ImportError:
+        print("ERROR: xgboost not installed. Run: pip install xgboost")
+        sys.exit(1)
 
-def train() -> None:
-    rng = np.random.default_rng(SEED)
+    rng = np.random.default_rng(RANDOM_SEED)
 
-    print("Generating synthetic training data …")
-    X_human = generate_human_samples(N_HUMAN, rng)   # label 1
-    X_bot   = generate_bot_samples(N_BOT,   rng)     # label 0
+    print(f"  Generating {N_HUMAN} human samples + {N_BOT} bot samples...")
+    human_X = generate_human_samples(N_HUMAN, rng)
+    bot_X   = generate_bot_samples(N_BOT, rng)
 
-    X = np.vstack([X_human, X_bot]).astype(np.float32)
-    y = np.array([1] * N_HUMAN + [0] * N_BOT, dtype=np.int32)
+    X = np.vstack([human_X, bot_X])
+    y = np.array([1] * N_HUMAN + [0] * N_BOT, dtype=np.float32)
 
-    print(f"  Total samples: {len(X)} ({N_HUMAN} human, {N_BOT} bot)")
+    # Shuffle
+    idx = rng.permutation(len(X))
+    X, y = X[idx], y[idx]
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.20, random_state=SEED, stratify=y
+    # Train/val split (80/20)
+    split  = int(0.8 * len(X))
+    X_train, X_val = X[:split], X[split:]
+    y_train, y_val = y[:split], y[split:]
+
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dval   = xgb.DMatrix(X_val,   label=y_val)
+
+    params = {
+        "objective":        "binary:logistic",
+        "eval_metric":      "auc",
+        "max_depth":        6,
+        "eta":              0.1,
+        "subsample":        0.8,
+        "colsample_bytree": 0.8,
+        "min_child_weight": 5,
+        "scale_pos_weight": N_BOT / N_HUMAN,   # handle class imbalance
+        "seed":             RANDOM_SEED,
+    }
+
+    print("  Training XGBoost classifier...")
+    booster = xgb.train(
+        params,
+        dtrain,
+        num_boost_round=200,
+        evals=[(dval, "val")],
+        early_stopping_rounds=20,
+        verbose_eval=50,
     )
 
-    scale_pos_weight = N_BOT / N_HUMAN  # ~0.5 — corrects class imbalance
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    booster.save_model(str(output_path))
 
-    model = xgb.XGBClassifier(
-        n_estimators=200,
-        max_depth=6,
-        learning_rate=0.1,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        scale_pos_weight=scale_pos_weight,
-        use_label_encoder=False,
-        eval_metric="auc",
-        random_state=SEED,
-        tree_method="hist",   # fast on CPU
-    )
+    # Quick eval
+    preds  = booster.predict(dval)
+    acc    = float(np.mean((preds > 0.5) == y_val))
+    print(f"  Validation accuracy: {acc:.3f}")
+    print(f"  Best iteration:      {booster.best_iteration}")
+    print(f"  Model saved to:      {output_path}")
 
-    print("Training XGBoost model …")
-    model.fit(
-        X_train, y_train,
-        eval_set=[(X_test, y_test)],
-        verbose=False,
-    )
 
-    # ── Evaluation ────────────────────────────────────────────────────────────
-    y_prob = model.predict_proba(X_test)[:, 1]
-    y_pred_at_threshold = (y_prob >= 0.85).astype(int)
+def main() -> None:
+    script_dir  = Path(__file__).parent
+    output_path = script_dir / "crust_model.json"
 
-    acc  = accuracy_score(y_test, y_pred_at_threshold)
-    prec = precision_score(y_test, y_pred_at_threshold, zero_division=0)
-    rec  = recall_score(y_test, y_pred_at_threshold, zero_division=0)
-    f1   = f1_score(y_test, y_pred_at_threshold, zero_division=0)
-    auc  = roc_auc_score(y_test, y_prob)
-
-    # FPR at 0.85 threshold
-    fp = int(((y_pred_at_threshold == 1) & (y_test == 0)).sum())
-    tn = int(((y_pred_at_threshold == 0) & (y_test == 0)).sum())
-    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-
-    print("\n── Evaluation results (threshold = 0.85) ──────────────────────")
-    print(f"  Accuracy:  {acc:.4f}")
-    print(f"  Precision: {prec:.4f}")
-    print(f"  Recall:    {rec:.4f}")
-    print(f"  F1:        {f1:.4f}")
-    print(f"  AUC-ROC:   {auc:.4f}")
-    print(f"  FPR@0.85:  {fpr:.4f}")
-    print("───────────────────────────────────────────────────────────────\n")
-
-    # ── Save model ────────────────────────────────────────────────────────────
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    model.save_model(OUTPUT_PATH)
-    print(f"Model saved → {OUTPUT_PATH}")
-
-    # Also save feature names alongside the model for downstream inspection
-    import json
-    meta_path = OUTPUT_PATH.replace(".json", "_meta.json")
-    with open(meta_path, "w") as f:
-        json.dump({"feature_names": FEATURE_NAMES, "n_features": 40}, f, indent=2)
-    print(f"Metadata saved → {meta_path}")
+    print("🤖 Training CRUST XGBoost model...")
+    print()
+    train(output_path)
+    print()
+    print("✅ Model training complete.")
+    print()
+    print("   Next step: docker compose up --build")
 
 
 if __name__ == "__main__":
-    train()
+    main()

@@ -1,0 +1,231 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana",    "name": "Grafana",    "version": "10.4.0" },
+    { "type": "panel",   "id": "timeseries", "name": "Time series","version": "" },
+    { "type": "panel",   "id": "stat",       "name": "Stat",       "version": "" },
+    { "type": "panel",   "id": "piechart",   "name": "Pie chart",  "version": "" }
+  ],
+  "description": "CRUST Overview — challenge rates, decision distribution, latency, bot block rate",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Challenge Trigger Rate (%)",
+      "description": "% of requests that triggered a SOFT_CHALLENGE. Target < 12%.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": 0  },
+              { "color": "yellow", "value": 12 },
+              { "color": "red",    "value": 20 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "targets": [{
+        "expr": "rate(crust_requests_total{decision=\"SOFT_CHALLENGE\"}[5m]) / rate(crust_requests_total[5m]) * 100",
+        "legendFormat": "Challenge Rate %",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 2,
+      "type": "piechart",
+      "title": "Decision Distribution (last 1h)",
+      "description": "Proportion of each decision type over the last hour.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "PASS"           }, "properties": [{ "id": "color", "value": { "fixedColor": "#22c55e", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "SOFT_CHALLENGE" }, "properties": [{ "id": "color", "value": { "fixedColor": "#f59e0b", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "HARD_CHALLENGE" }, "properties": [{ "id": "color", "value": { "fixedColor": "#f97316", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "BLOCK"          }, "properties": [{ "id": "color", "value": { "fixedColor": "#ef4444", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "pieType": "donut",
+        "tooltip": { "mode": "single" },
+        "legend":  { "displayMode": "table", "placement": "right" }
+      },
+      "targets": [{
+        "expr":         "sum by (decision)(increase(crust_requests_total[1h]))",
+        "legendFormat": "{{decision}}",
+        "refId":        "A"
+      }]
+    },
+
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Bot Block Rate (%)",
+      "description": "% of traffic that was BLOCK or HARD_CHALLENGE. Target ≥ 92%.",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": 0  },
+              { "color": "yellow", "value": 80 },
+              { "color": "green",  "value": 92 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      },
+      "targets": [{
+        "expr": "(rate(crust_requests_total{decision=\"BLOCK\"}[5m]) + rate(crust_requests_total{decision=\"HARD_CHALLENGE\"}[5m])) / rate(crust_requests_total[5m]) * 100",
+        "legendFormat": "Block Rate %",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Toppings Challenge Completion Rate (%)",
+      "description": "% of /challenge/result calls that returned PASS. Target ≥ 92%.",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": 0  },
+              { "color": "yellow", "value": 80 },
+              { "color": "green",  "value": 92 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background"
+      },
+      "targets": [{
+        "expr": "rate(crust_requests_total{decision=\"PASS\",route=\"/challenge/result\"}[5m]) / rate(crust_requests_total{route=\"/challenge/result\"}[5m]) * 100",
+        "legendFormat": "Completion Rate %",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Verification Latency — p50 / p95 / p99",
+      "description": "JWT validation duration. Reference line at 200ms.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "min": 0 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p50" }, "properties": [{ "id": "color", "value": { "fixedColor": "#22c55e", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "p95" }, "properties": [{ "id": "color", "value": { "fixedColor": "#f59e0b", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "p99" }, "properties": [{ "id": "color", "value": { "fixedColor": "#ef4444", "mode": "fixed" } }] }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend":  { "displayMode": "list", "placement": "bottom" }
+      },
+      "targets": [
+        {
+          "expr":         "histogram_quantile(0.50, rate(crust_validation_duration_ms_bucket[5m]))",
+          "legendFormat": "p50",
+          "refId":        "A"
+        },
+        {
+          "expr":         "histogram_quantile(0.95, rate(crust_validation_duration_ms_bucket[5m]))",
+          "legendFormat": "p95",
+          "refId":        "B"
+        },
+        {
+          "expr":         "histogram_quantile(0.99, rate(crust_validation_duration_ms_bucket[5m]))",
+          "legendFormat": "p99",
+          "refId":        "C"
+        }
+      ],
+      "transformations": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [{ "color": "transparent", "value": 200 }]
+      }
+    },
+
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Service Error Rate (5xx)",
+      "description": "Rate of HTTP 5xx responses from the crust-service.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min":  0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": 0    },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red",    "value": 0.1  }
+            ]
+          }
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{
+        "expr":         "rate(http_requests_total{status=~\"5..\"}[5m])",
+        "legendFormat": "5xx — {{handler}}",
+        "refId":        "A"
+      }]
+    }
+
+  ],
+  "refresh":       "10s",
+  "schemaVersion": 39,
+  "tags":          ["crust", "overview", "security"],
+  "templating": {
+    "list": [{
+      "current": {},
+      "hide":    0,
+      "name":    "DS_PROMETHEUS",
+      "options": [],
+      "query":   "prometheus",
+      "refresh": 1,
+      "type":    "datasource"
+    }]
+  },
+  "time":     { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "title":    "CRUST — Overview",
+  "uid":      "crust-overview-v1",
+  "version":  1
+}
