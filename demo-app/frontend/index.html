@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CRUST Demo</title>
+
+    <!--
+      CRUST SDK — loaded as a script tag so it initialises immediately,
+      before any React hydration, maximising the passive observation window.
+      In production this would be served from a CDN.
+    -->
+    <script src="/crust.js" defer></script>
+
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      :root {
+        --font-sans: "Inter", system-ui, sans-serif;
+        --surface-base: #f5f5f5;
+        --surface-primary: #ffffff;
+        --text-primary: rgba(0,0,0,0.92);
+        --text-secondary: rgba(0,0,0,0.64);
+        --text-tertiary: rgba(0,0,0,0.4);
+        --border-default: rgba(0,0,0,0.08);
+        --button-primary-bg: #080808;
+        --button-primary-fg: #ffffff;
+        --state-error-bg: #fef2f2;
+        --state-error-fg: #b91c1c;
+        --state-error-border: #ef4444;
+      }
+      html {
+        font-family: var(--font-sans);
+        font-size: 16px;
+        -webkit-font-smoothing: antialiased;
+      }
+      body {
+        background: var(--surface-base);
+        color: var(--text-primary);
+        min-height: 100vh;
+      }
+      input:focus {
+        outline: none;
+        border-color: #29a2ff !important;
+        box-shadow: 0 0 0 2px rgba(5,136,240,0.16);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

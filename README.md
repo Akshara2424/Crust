@@ -1,230 +1,238 @@
-# CRUST SDK
+# CRUST — Passive Human Verification System
 
-**C**aptcha **R**eplacement **U**sing **S**ignal-based **T**racking  
-ML-based passive human verification — zero interruption for most users.
+A machine-learning based CAPTCHA replacement that distinguishes humans from bots
+using passive browser behavioural signals. No user interruption unless the model
+is uncertain — only then does a lightweight pizza-assembly challenge appear.
 
 ---
 
-## How it works
+## Architecture
 
 ```
 Browser
-  └─► CRUST SDK (Web Worker)
-        ├─ Collects 40 behavioural features passively over 5–30 s
-        ├─ Extracts feature vector client-side; raw events discarded
-        └─ POST /verify → signed RS256 JWT (confidence + decision)
-              ├─ PASS           → JWT returned immediately
-              ├─ SOFT_CHALLENGE → pizza assembly game (Toppings)
-              ├─ HARD_CHALLENGE → escalated challenge (Phase 2)
-              └─ BLOCK          → rejects with Error("CRUST_BLOCKED")
+  └─► CRUST SDK (Web Worker, < 8 KB)
+        │  40 behavioural signals collected passively
+        │  POST /api/crust/verify  { feature_vector: float[40] }
+        ▼
+  demo-app (Express proxy)
+        │
+        ▼
+  crust-service (Python / FastAPI / XGBoost)
+        │  confidence 0.0–1.0  →  DecisionEnum  →  RS256 JWT
+        ▼
+  crustGuard middleware
+        │  validates JWT locally (no network call)
+        ├─► 200 OK   (PASS)
+        └─► 403      (BLOCK / expired / tampered)
+
+  Toppings Challenge (React, inline)
+        Triggered only on SOFT_CHALLENGE (confidence 0.60–0.84)
+        Collects 8 extra interaction signals during pizza assembly
 ```
 
-The JWT is then attached to your protected API requests.  Your gateway
-validates the JWT locally — no round-trip to the verification service.
+---
+
+## Repo structure
+
+```
+/
+├── crust-service/          Phase 2 — Python FastAPI ML service
+├── crust-toppings/         Phase 3 — React Toppings Challenge component
+├── crust-middleware/       Phase 4A — Express crustGuard middleware
+├── demo-app/               Phase 4B — Wired demo (Express + React)
+│   ├── frontend/           Vite + React frontend
+│   └── server/             Express server with guarded routes
+├── docker-compose.yml      Full stack orchestration
+├── prometheus.yml          Scrape config
+├── grafana/                Dashboard + datasource provisioning
+└── .env.example            Required environment variables
+```
 
 ---
 
 ## Quick start
 
-### Option A — Script tag (no build step)
+### Option A — Docker Compose (full stack)
 
-```html
-<!-- Optional: pre-configure before the script loads -->
-<script>
-  window.CRUSTConfig = {
-    apiBase:           '/api/crust',  // default
-    collectionWindowMs: 10000,        // default
-    debug:             false          // set true for verbose logs
-  };
-</script>
-
-<script src="/assets/crust.iife.js"></script>
-
-<script>
-  document.getElementById('login-btn').addEventListener('click', async () => {
-    const jwt = await window.CRUST.protect('login');
-    await fetch('/api/login', {
-      method:  'POST',
-      headers: { 'x-crust-jwt': jwt },
-      body:    JSON.stringify({ username, password }),
-    });
-  });
-</script>
-```
-
-### Option B — npm / bundler
+**1. Generate RSA keys**
 
 ```bash
-npm install crust-sdk
+openssl genrsa -out crust_private.pem 2048
+openssl rsa -in crust_private.pem -pubout -out crust_public.pem
 ```
 
-```ts
-import { initCrust } from 'crust-sdk';
+**2. Set environment variables**
 
-// Call once at app startup (e.g. in main.ts / index.tsx)
-initCrust({
-  apiBase:            '/api/crust',
-  collectionWindowMs: 10_000,
-  debug:              import.meta.env.DEV,
-});
+```bash
+cp .env.example .env
+
+# Fill in the base64-encoded keys:
+export CRUST_PRIVATE_KEY_PEM=$(base64 -w 0 crust_private.pem)
+export CRUST_PUBLIC_KEY_PEM=$(base64 -w 0 crust_public.pem)
+
+# Write them into .env
+echo "CRUST_PRIVATE_KEY_PEM=$CRUST_PRIVATE_KEY_PEM" >> .env
+echo "CRUST_PUBLIC_KEY_PEM=$CRUST_PUBLIC_KEY_PEM"   >> .env
 ```
 
-Then, anywhere you need to gate an action:
+**3. Start everything**
 
-```ts
-// Returns a PASS JWT string, or throws on BLOCK / service failure
-const jwt = await window.CRUST.protect('checkout');
-
-await fetch('/api/checkout', {
-  method:  'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'x-crust-jwt':  jwt,
-  },
-  body: JSON.stringify(payload),
-});
+```bash
+docker compose up --build
 ```
+
+| Service      | URL                      |
+|-------------|--------------------------|
+| Demo app     | http://localhost:3000    |
+| ML service   | http://localhost:8000    |
+| Prometheus   | http://localhost:9090    |
+| Grafana      | http://localhost:3001    |
+
+Grafana login: `admin` / `admin`
+
+---
+
+### Option B — Local dev (no Docker)
+
+**Prerequisites:** Node 20+, Python 3.12+
+
+**1. Start the Python ML service**
+
+```bash
+cd crust-service
+pip install -r requirements.txt
+export CRUST_PRIVATE_KEY_PEM=$(cat ../crust_private.pem)
+export CRUST_PUBLIC_KEY_PEM=$(cat ../crust_public.pem)
+uvicorn app.main:app --port 8000 --reload
+```
+
+**2. Build and link crust-middleware**
+
+```bash
+cd crust-middleware
+npm install
+npm run build
+npm link
+```
+
+**3. Start the demo app server**
+
+```bash
+cd demo-app
+npm link crust-middleware
+npm install
+
+# Set env vars
+export CRUST_PUBLIC_KEY_PEM=$(cat ../crust_public.pem)
+export CRUST_SERVICE_URL=http://localhost:8000
+
+npm run dev:server   # Express on :3000
+```
+
+**4. Start the frontend dev server**
+
+```bash
+# In a second terminal, from demo-app/
+npm run dev:frontend  # Vite on :5173 (proxies /api → :3000)
+```
+
+Open http://localhost:5173
+
+---
+
+## Running tests
+
+**Middleware (25 tests)**
+```bash
+cd crust-middleware
+npm install
+npm test
+```
+
+**Toppings Challenge (16 tests)**
+```bash
+cd crust-toppings
+npm install
+npm test
+```
+
+---
+
+## Running Storybook (Toppings Challenge)
+
+```bash
+cd crust-toppings
+npm install
+npm run storybook
+# → http://localhost:6006
+```
+
+---
+
+## Environment variables reference
+
+| Variable              | Used by          | Description |
+|-----------------------|-----------------|-------------|
+| `CRUST_PRIVATE_KEY_PEM` | crust-service  | Base64-encoded RS256 private key PEM for JWT signing |
+| `CRUST_PUBLIC_KEY_PEM`  | demo-app       | Base64-encoded RS256 public key PEM for JWT verification |
+| `CRUST_SERVICE_URL`     | demo-app       | URL the Express server proxies verify/challenge requests to |
+| `CRUST_MODEL_PATH`      | crust-service  | Path to the XGBoost model JSON inside the container |
+| `PORT`                  | demo-app       | Express server port (default: 3000) |
+| `LOG_LEVEL`             | crust-service  | Uvicorn log level (default: info) |
 
 ---
 
 ## API reference
 
-### `window.CRUST.protect(actionName: string): Promise<string>`
+### POST `/api/crust/verify`
+Proxied to crust-service. Accepts 40-float feature vector, returns signed JWT.
 
-Collects or retrieves the 40-float feature vector, posts it to `/verify`,
-handles challenges, and resolves with a signed JWT string.
+### POST `/api/crust/challenge/order`
+Proxied to crust-service. Returns a randomised pizza order for the SOFT_CHALLENGE.
 
-| Scenario | Behaviour |
-|---|---|
-| First call | Triggers feature extraction + `/verify` POST |
-| Repeat call within JWT TTL | Returns cached JWT (in-memory only) |
-| JWT expired | Clears cache, re-collects, re-verifies |
-| `SOFT_CHALLENGE` | Runs Toppings stub (Phase 1) / full game (Phase 3) |
-| `BLOCK` | Throws `Error("CRUST_BLOCKED")` |
-| Service unreachable | Retries 3× (200 / 400 / 800 ms backoff), then throws `Error("CRUST_SERVICE_UNAVAILABLE")` |
+### POST `/api/crust/challenge/result`
+Proxied to crust-service. Submits completed pizza order + 8 game signals, returns new JWT.
 
-### `initCrust(config?: Partial<CrustConfig>): void`
+### POST `/api/auth/login` *(guarded)*
+Requires valid `x-crust-jwt: <PASS JWT>` header. Returns 403 if missing/invalid.
 
-Initialises the SDK.  Safe to call from a `<script>` module or your app
-entry point.  Subsequent calls are no-ops.
+### POST `/api/checkout` *(guarded)*
+Requires valid `x-crust-jwt: <PASS JWT>` header.
 
-### `CrustConfig`
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `apiBase` | `string` | `"/api/crust"` | Base URL of the CRUST verification service |
-| `collectionWindowMs` | `number` | `10000` | Observation window before feature extraction (ms) |
-| `debug` | `boolean` | `false` | Verbose logging to `console.log` |
+### GET `/crust/metrics`
+Prometheus text exposition of `crust_requests_total`, `crust_failures_total`,
+`crust_validation_duration_ms`.
 
 ---
 
-## Feature vector (40 floats)
+## Decision thresholds
 
-All values are normalised to **[0, 1]**.
-
-| Dim | Name | Description |
-|-----|------|-------------|
-| 1 | `env_webdriver_flag` | `navigator.webdriver` detected |
-| 2 | `env_canvas_hash` | FNV-1a hash of 64×64 OffscreenCanvas render |
-| 3 | `env_plugin_count` | Plugin count / 20 |
-| 4 | `env_language_mismatch` | Language tag vs timezone continent mismatch |
-| 5 | `env_screen_depth` | `screen.colorDepth` / 32 |
-| 6 | `env_timezone_offset` | UTC offset mapped to [0, 1] |
-| 7 | `env_touch_support` | `navigator.maxTouchPoints > 0` |
-| 8 | `env_devtools_open` | Timing-based debugger heuristic |
-| 9 | `mouse_trajectory_linearity` | Straight-line / path-length ratio |
-| 10 | `mouse_avg_velocity` | Mean pointer speed (px/ms), /3 |
-| 11 | `mouse_velocity_variance` | Variance of pointer speed |
-| 12 | `mouse_curvature_mean` | Mean discrete curvature |
-| 13 | `mouse_pause_count` | Low-velocity pauses ≥ 300 ms, /20 |
-| 14 | `mouse_overshoot_count` | Post-click direction reversals, /10 |
-| 15 | `mouse_click_pressure_variance` | Variance of `PointerEvent.pressure` |
-| 16 | `mouse_event_count` | Event count / 2000 |
-| 17 | `mouse_idle_ratio` | Idle time (gaps > 500 ms) / session |
-| 18 | `mouse_fitts_adherence` | Pearson r(Fitts predicted, observed MT) → [0,1] |
-| 19 | `ks_iki_mean` | Inter-key interval mean / 500 ms |
-| 20 | `ks_iki_variance` | IKI variance / 250 000 |
-| 21 | `ks_hold_time_mean` | Key hold duration mean / 300 ms |
-| 22 | `ks_hold_time_variance` | Hold duration variance / 90 000 |
-| 23 | `ks_bigram_consistency` | 1 − mean CoV of repeated bigram IKIs |
-| 24 | `ks_event_count` | Keydown events / 500 |
-| 25 | `ks_backspace_ratio` | Backspaces / total keydowns |
-| 26 | `ks_burst_ratio` | Burst transitions (IKI < 150 ms) / total |
-| 27 | `sess_first_interaction_delay` | Time to first event / 30 s |
-| 28 | `sess_focus_switches` | Focus/blur transitions / 20 |
-| 29 | `sess_tab_hidden_duration` | Hidden time / session duration |
-| 30 | `sess_scroll_velocity_mean` | Scroll speed mean / 5 px/ms |
-| 31 | `sess_scroll_direction_reversals` | Reversals / 30 |
-| 32 | `sess_form_focus_count` | Input/select focuses / 20 |
-| 33 | `sess_copy_paste_detected` | 1 if paste or copy fired |
-| 34 | `sess_total_duration` | Session length / 120 s |
-| 35 | `net_request_jitter` | Std-dev of 3 probe RTTs / 200 ms |
-| 36 | `net_ja3_fingerprint` | First OPTIONS RTT / 500 ms (TLS proxy) |
-| 37 | `net_connection_type` | Ordinal from `NetworkInformation.type` |
-| 38 | `net_rtt_estimate` | `NetworkInformation.rtt` / 2000 ms |
-| 39 | `net_downlink_estimate` | `NetworkInformation.downlink` / 100 Mbit/s |
-| 40 | `net_preflight_timing` | Mean OPTIONS RTT / 1000 ms |
+| Decision        | Confidence   | Behaviour |
+|----------------|-------------|-----------|
+| `PASS`          | ≥ 0.85      | Transparent — user never interrupted |
+| `SOFT_CHALLENGE`| 0.60–0.84   | Pizza assembly challenge shown inline |
+| `HARD_CHALLENGE`| 0.40–0.59   | Escalated challenge (configurable per endpoint) |
+| `BLOCK`         | < 0.40      | 403 Forbidden |
 
 ---
 
-## Gateway integration
+## JWT structure
 
-Your backend middleware must validate the JWT on every protected request:
-
-```ts
-// Express example
-import jwt from 'jsonwebtoken';
-
-app.use('/api/protected', (req, res, next) => {
-  const token = req.headers['x-crust-jwt'];
-  if (!token) return res.status(403).json({ error: 'Missing CRUST token' });
-
-  try {
-    const payload = jwt.verify(token, PUBLIC_KEY_PEM, {
-      algorithms: ['RS256'],
-      issuer:     'crust-verification-service',
-      subject:    'crust-session',
-    });
-    if (payload.decision === 'BLOCK') return res.sendStatus(403);
-    next();
-  } catch {
-    return res.sendStatus(403);
-  }
-});
+```json
+{
+  "alg": "RS256",
+  "typ": "JWT"
+}
+{
+  "sub":          "crust-session",
+  "iss":          "crust-verification-service",
+  "iat":          1714000000,
+  "exp":          1714000900,
+  "confidence":   0.91,
+  "decision":     "PASS",
+  "feature_hash": "<sha256 of feature vector>"
+}
 ```
 
----
-
-## Security guarantees
-
-- **No raw events transmitted.** Mouse coordinates, keystroke timestamps, and scroll
-  positions are processed inside the Web Worker and discarded after feature extraction.
-  Only the 40-float vector reaches the network.
-- **No persistent storage.** The JWT cache is in-memory only — never `localStorage`,
-  `sessionStorage`, or cookies.
-- **Stateless service.** All session state lives in the signed JWT.
-- **Worker isolation.** Signal collection runs on a separate thread; it never blocks
-  the main thread or the page's JavaScript execution context.
-
----
-
-## Build
-
-```bash
-npm install
-npm run build      # → dist/index.js  +  dist/crust.iife.js
-npm run typecheck  # strict tsc type check (no emit)
-npm run dev        # watch mode
-```
-
----
-
-## Phase roadmap
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| 1 | ✅ This PR | SDK + stub Toppings challenge |
-| 2 | Planned | Verification Service (FastAPI + XGBoost) |
-| 3 | Planned | Full React Toppings UI component |
-| 4 | Planned | Express / NGINX gateway middleware |
-| 5 | Planned | Grafana dashboard + Prometheus metrics |
+Valid for **15 minutes** (`exp = iat + 900`). Gateway validates locally — no
+network call to crust-service on every request.

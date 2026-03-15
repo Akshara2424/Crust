@@ -1,0 +1,202 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana",    "name": "Grafana",    "version": "10.4.0" },
+    { "type": "panel",   "id": "timeseries", "name": "Time series","version": "" },
+    { "type": "panel",   "id": "stat",       "name": "Stat",       "version": "" },
+    { "type": "panel",   "id": "gauge",      "name": "Gauge",      "version": "" }
+  ],
+  "annotations": { "list": [] },
+  "description": "CRUST human-verification system — request traffic, decision distribution, failure reasons, and validation latency.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Requests",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "targets": [{
+        "expr":         "sum(crust_requests_total)",
+        "legendFormat": "Requests",
+        "refId":        "A"
+      }]
+    },
+
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "PASS Rate",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": 0   },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "green",  "value": 0.85 }
+            ]
+          }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{
+        "expr":         "sum(crust_requests_total{decision=\"PASS\"}) / sum(crust_requests_total)",
+        "legendFormat": "PASS Rate",
+        "refId":        "A"
+      }]
+    },
+
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total Failures",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": 0  },
+              { "color": "yellow","value": 10 },
+              { "color": "red",   "value": 50 }
+            ]
+          }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{
+        "expr":         "sum(crust_failures_total)",
+        "legendFormat": "Failures",
+        "refId":        "A"
+      }]
+    },
+
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "p99 Validation Latency",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [{
+        "expr":         "histogram_quantile(0.99, rate(crust_validation_duration_ms_bucket[5m]))",
+        "legendFormat": "p99 ms",
+        "refId":        "A"
+      }]
+    },
+
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Request Rate by Decision",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "PASS"           }, "properties": [{ "id": "color", "value": { "fixedColor": "#22c55e", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "SOFT_CHALLENGE" }, "properties": [{ "id": "color", "value": { "fixedColor": "#f59e0b", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "HARD_CHALLENGE" }, "properties": [{ "id": "color", "value": { "fixedColor": "#f97316", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "BLOCK"          }, "properties": [{ "id": "color", "value": { "fixedColor": "#ef4444", "mode": "fixed" } }] }
+        ]
+      },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{
+        "expr":         "rate(crust_requests_total[1m])",
+        "legendFormat": "{{decision}}",
+        "refId":        "A"
+      }]
+    },
+
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Failure Rate by Reason",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{
+        "expr":         "rate(crust_failures_total[1m])",
+        "legendFormat": "{{reason}}",
+        "refId":        "A"
+      }]
+    },
+
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Validation Latency Percentiles",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr":         "histogram_quantile(0.50, rate(crust_validation_duration_ms_bucket[5m]))",
+          "legendFormat": "p50",
+          "refId":        "A"
+        },
+        {
+          "expr":         "histogram_quantile(0.95, rate(crust_validation_duration_ms_bucket[5m]))",
+          "legendFormat": "p95",
+          "refId":        "B"
+        },
+        {
+          "expr":         "histogram_quantile(0.99, rate(crust_validation_duration_ms_bucket[5m]))",
+          "legendFormat": "p99",
+          "refId":        "C"
+        }
+      ]
+    },
+
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Requests by Route",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": { "tooltip": { "mode": "multi" } },
+      "targets": [{
+        "expr":         "rate(crust_requests_total[1m])",
+        "legendFormat": "{{route}} — {{decision}}",
+        "refId":        "A"
+      }]
+    }
+
+  ],
+  "refresh":        "10s",
+  "schemaVersion":  39,
+  "tags":           ["crust", "security", "bot-detection"],
+  "templating": {
+    "list": [{
+      "current": {},
+      "hide":    0,
+      "includeAll": false,
+      "name":    "DS_PROMETHEUS",
+      "options": [],
+      "query":   "prometheus",
+      "refresh": 1,
+      "type":    "datasource"
+    }]
+  },
+  "time":       { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone":   "browser",
+  "title":      "CRUST — Human Verification",
+  "uid":        "crust-main-v1",
+  "version":    1
+}

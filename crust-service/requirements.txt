@@ -1,15 +1,43 @@
-fastapi==0.111.1
-uvicorn[standard]==0.30.1
-pydantic==2.7.4
-pydantic-settings==2.3.4
-python-jose[cryptography]==3.3.0
-xgboost==2.0.3
-numpy==1.26.4
-scikit-learn==1.5.0
-slowapi==0.1.9
-prometheus-client==0.20.0
-httpx==0.27.0
-pytest==8.2.2
-pytest-asyncio==0.23.7
-anyio==4.4.0
-cryptography==42.0.8
+# =============================================================================
+# CRUST Verification Service - Python dependencies
+# Python 3.12+
+# Install: pip install -r requirements.txt
+# =============================================================================
+
+# -- Web framework ---------------------------------------------------------
+fastapi==0.111.0
+uvicorn[standard]==0.29.0          # ASGI server with uvloop + httptools
+
+# -- Data validation -------------------------------------------------------
+pydantic==2.7.1
+pydantic-settings==2.2.1           # settings from env vars
+
+# -- ML inference ----------------------------------------------------------
+xgboost>=2.0.3                     # gradient boosted trees model
+scikit-learn>=1.4.0                # sklearn for ML model compatibility
+numpy>=1.26.4                      # required by xgboost
+
+# -- JWT signing / verification -------------------------------------------
+python-jose[cryptography]==3.3.0   # RS256 JWT sign + verify
+cryptography==42.0.7               # underlying RSA primitives
+
+# -- HTTP utilities --------------------------------------------------------
+python-multipart==0.0.9            # form data parsing (FastAPI dep)
+httpx==0.27.0                      # async HTTP client (for health checks / tests)
+
+# -- Observability ---------------------------------------------------------
+prometheus-fastapi-instrumentator==6.1.0   # auto-instruments FastAPI routes
+prometheus-client==0.20.0                  # Prometheus metrics primitives
+slowapi==0.1.9                             # rate limiting for FastAPI
+
+# -- Structured logging ---------------------------------------------------
+python-json-logger==2.0.7          # JSON log formatter
+
+# -- Utilities --------------------------------------------------------
+python-dateutil==2.9.0             # ISO datetime parsing
+uuid==1.30                         # UUID generation (stdlib in 3.12, kept for compat)
+
+# =============================================================================
+# Dev / test dependencies (not installed in production Docker image)
+# Install with: pip install -r requirements-dev.txt
+# =============================================================================
