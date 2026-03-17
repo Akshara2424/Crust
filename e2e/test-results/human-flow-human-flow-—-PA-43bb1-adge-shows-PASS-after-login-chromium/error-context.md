@@ -18,8 +18,8 @@
         - textbox "Password" [ref=e14]:
           - /placeholder: Enter password
           - text: password123
-      - alert [ref=e15]: Verification failed. Please try again.
-      - button "Try again" [active] [ref=e16] [cursor=pointer]
+      - alert [ref=e15]: CRUST_VERIFICATION_FAILED
+      - button "Sign in" [ref=e16] [cursor=pointer]
     - paragraph [ref=e17]:
       - link "Go to Checkout demo →" [ref=e18] [cursor=pointer]:
         - /url: /checkout

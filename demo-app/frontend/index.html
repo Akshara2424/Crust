@@ -5,13 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CRUST Demo</title>
 
-    <!--
-      CRUST SDK — loaded as a script tag so it initialises immediately,
-      before any React hydration, maximising the passive observation window.
-      In production this would be served from a CDN.
-    -->
-    <script src="/crust.js" defer></script>
-
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
       :root {
@@ -28,22 +21,34 @@
         --state-error-fg: #b91c1c;
         --state-error-border: #ef4444;
       }
-      html {
-        font-family: var(--font-sans);
-        font-size: 16px;
-        -webkit-font-smoothing: antialiased;
-      }
-      body {
-        background: var(--surface-base);
-        color: var(--text-primary);
-        min-height: 100vh;
-      }
+      html { font-family: var(--font-sans); font-size: 16px; -webkit-font-smoothing: antialiased; }
+      body { background: var(--surface-base); color: var(--text-primary); min-height: 100vh; }
       input:focus {
         outline: none;
         border-color: #29a2ff !important;
         box-shadow: 0 0 0 2px rgba(5,136,240,0.16);
       }
     </style>
+
+    <!--
+      Pre-configure CRUST before the SDK loads.
+      apiBase points to the Express proxy which forwards to the Python service.
+      debug: true logs every SDK step to the browser console.
+    -->
+    <script>
+      window.CRUSTConfig = {
+        apiBase:            '/api/crust',
+        collectionWindowMs: 5000,
+        debug:              true
+      };
+    </script>
+
+    <!--
+      CRUST SDK — loaded synchronously so window.CRUST is available
+      before React hydration begins.
+      Served by Express from crust-sdk/dist/crust.iife.js
+    -->
+    <script src="/crust.js"></script>
   </head>
   <body>
     <div id="root"></div>

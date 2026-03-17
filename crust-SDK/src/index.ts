@@ -4,7 +4,7 @@
  * Bootstraps the Web Worker, registers passive event listeners on the main
  * thread, and exposes `window.CRUST.protect(actionName)`.
  *
- * Zero dependencies.  All event data is forwarded to the worker; no raw
+ * Zero dependencies. All event data is forwarded to the worker; no raw
  * coordinates or timestamps are stored on the main thread.
  */
 
@@ -16,23 +16,26 @@ import type {
   WorkerInboundMessage,
   WorkerOutboundMessage,
 } from './types.js';
-import { DecisionEnum, DEFAULT_CONFIG }       from './types.js';
+import { DecisionEnum, DEFAULT_CONFIG } from './types.js';
 import { runToppingsChallenge, GAME_SIGNAL_KEYS } from './toppings-stub.js';
+
+// ── Worker URL ────────────────────────────────────────────────────────────────
+// WORKER_URL is injected by esbuild --define at build time.
+// The worker is bundled separately as dist/crust.worker.js so that
+// `new Worker(url)` works in an IIFE context (import.meta.url is unavailable).
+declare const WORKER_URL: string;
+const RESOLVED_WORKER_URL = (typeof WORKER_URL !== 'undefined')
+  ? WORKER_URL
+  : '/dist/crust.worker.js';
 
 // ── JWT helpers ───────────────────────────────────────────────────────────────
 
 function decodeJwtPayload(jwt: string): JWTPayload {
   const parts = jwt.split('.');
   if (parts.length !== 3) throw new Error('Malformed JWT');
-  // Base64url → Base64 → JSON
-  const b64 = (parts[1] as string)
-    .replace(/-/g, '+')
-    .replace(/_/g, '/');
+  const b64 = (parts[1] as string).replace(/-/g, '+').replace(/_/g, '/');
   const json = decodeURIComponent(
-    atob(b64)
-      .split('')
-      .map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))
-      .join(''),
+    atob(b64).split('').map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join(''),
   );
   return JSON.parse(json) as JWTPayload;
 }
@@ -50,16 +53,11 @@ function isJwtExpired(jwt: string): boolean {
 
 const RETRY_DELAYS_MS = [200, 400, 800] as const;
 
-async function fetchWithRetry(
-  url:     string,
-  init:    RequestInit,
-): Promise<Response> {
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
   let lastError: Error = new Error('CRUST_SERVICE_UNAVAILABLE');
-
   for (let attempt = 0; attempt < RETRY_DELAYS_MS.length + 1; attempt++) {
     try {
       const response = await fetch(url, init);
-      // 5xx → treat as transient, retry
       if (response.status >= 500 && attempt < RETRY_DELAYS_MS.length) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -67,55 +65,53 @@ async function fetchWithRetry(
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < RETRY_DELAYS_MS.length) {
-        await sleep(RETRY_DELAYS_MS[attempt] as number);
+        await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt] as number));
       }
     }
   }
-  throw new Error('CRUST_SERVICE_UNAVAILABLE');
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  throw lastError;
 }
 
 // ── SDK class ─────────────────────────────────────────────────────────────────
 
 class CrustSDK {
   readonly config: CrustConfig;
-  private readonly worker: Worker;
+  private worker: Worker | null = null;
 
-  /** Pending feature-extraction promises, keyed by correlation id */
   private readonly pendingExtract = new Map<string, {
     resolve: (v: FeatureVector) => void;
     reject:  (e: Error) => void;
   }>();
 
-  private cachedJwt:   string | null = null;
-  private reqSeq                     = 0;
+  private cachedJwt: string | null = null;
+  private reqSeq = 0;
 
   constructor(config: Partial<CrustConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-
-    // Spawn the Web Worker — bundlers inline the URL via `new URL(…, import.meta.url)`
-    this.worker = new Worker(
-      new URL('./worker.ts', import.meta.url),
-      { type: 'module' },
-    );
-    this.worker.addEventListener('message', this.onWorkerMessage.bind(this));
-    this.worker.addEventListener('error', (e: ErrorEvent) => {
-      console.error('[CRUST] Worker error:', e.message);
-    });
-
-    // INIT triggers env feature collection within 800 ms
-    this.postToWorker({ type: 'INIT', payload: this.config });
-
+    this.initWorker();
     this.registerDomListeners();
+  }
+
+  private initWorker(): void {
+    try {
+      // Plain string URL — works in IIFE bundles where import.meta.url is unavailable
+      this.worker = new Worker(RESOLVED_WORKER_URL);
+      this.worker.addEventListener('message', this.onWorkerMessage.bind(this));
+      this.worker.addEventListener('error', (e: ErrorEvent) => {
+        console.error('[CRUST] Worker error:', e.message);
+      });
+      this.postToWorker({ type: 'INIT', payload: this.config });
+      if (this.config.debug) console.log('[CRUST] Worker spawned from', RESOLVED_WORKER_URL);
+    } catch (err) {
+      // Worker spawn failed (e.g. file:// protocol) — fall back gracefully
+      console.warn('[CRUST] Could not spawn Web Worker:', err);
+      this.worker = null;
+    }
   }
 
   // ── DOM → Worker event forwarding ─────────────────────────────────────────
 
   private registerDomListeners(): void {
-    // ── Pointer (mouse / touch / stylus) ──────────────────────────────────
     const forwardPointer = (e: PointerEvent, isClick: boolean): void => {
       const rect = (e.target instanceof Element)
         ? e.target.getBoundingClientRect()
@@ -123,20 +119,15 @@ class CrustSDK {
       this.postToWorker({
         type: 'MOUSE_EVENT',
         payload: {
-          x:        e.clientX,
-          y:        e.clientY,
-          t:        performance.now(),
-          pressure: e.pressure,
-          isClick,
-          targetW:  rect.width,
-          targetH:  rect.height,
+          x: e.clientX, y: e.clientY, t: performance.now(),
+          pressure: e.pressure, isClick,
+          targetW: rect.width, targetH: rect.height,
         },
       });
     };
     document.addEventListener('pointermove', e => forwardPointer(e, false), { passive: true });
     document.addEventListener('pointerdown', e => forwardPointer(e, true),  { passive: true });
 
-    // ── Keyboard ──────────────────────────────────────────────────────────
     const forwardKey = (type: 'down' | 'up') => (e: KeyboardEvent): void => {
       this.postToWorker({
         type: 'KEY_EVENT',
@@ -146,28 +137,18 @@ class CrustSDK {
     document.addEventListener('keydown', forwardKey('down'), { passive: true });
     document.addEventListener('keyup',   forwardKey('up'),   { passive: true });
 
-    // ── Wheel / scroll ────────────────────────────────────────────────────
-    // Use `wheel` for signed deltaY; fall back to tracking scrollY delta.
     let lastScrollY = window.scrollY;
     document.addEventListener('wheel', e => {
-      this.postToWorker({
-        type: 'SCROLL_EVENT',
-        payload: { deltaY: e.deltaY, t: performance.now() },
-      });
+      this.postToWorker({ type: 'SCROLL_EVENT', payload: { deltaY: e.deltaY, t: performance.now() } });
     }, { passive: true });
-    // Also listen to scroll for pages that scroll programmatically
     window.addEventListener('scroll', () => {
       const delta = window.scrollY - lastScrollY;
       lastScrollY = window.scrollY;
       if (delta !== 0) {
-        this.postToWorker({
-          type: 'SCROLL_EVENT',
-          payload: { deltaY: delta, t: performance.now() },
-        });
+        this.postToWorker({ type: 'SCROLL_EVENT', payload: { deltaY: delta, t: performance.now() } });
       }
     }, { passive: true });
 
-    // ── Page lifecycle ────────────────────────────────────────────────────
     window.addEventListener('focus', () => {
       this.postToWorker({ type: 'SESSION_EVENT', payload: { type: 'focus', t: performance.now() } });
     });
@@ -180,16 +161,12 @@ class CrustSDK {
         payload: { type: 'visibility', t: performance.now(), hidden: document.hidden },
       });
     });
-
-    // ── Form interactions ─────────────────────────────────────────────────
-    document.addEventListener('focusin', (e) => {
+    document.addEventListener('focusin', e => {
       const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase() ?? '';
       if (tag === 'input' || tag === 'textarea' || tag === 'select') {
         this.postToWorker({ type: 'SESSION_EVENT', payload: { type: 'formfocus', t: performance.now() } });
       }
     }, { passive: true });
-
-    // ── Clipboard ─────────────────────────────────────────────────────────
     document.addEventListener('copy',  () => {
       this.postToWorker({ type: 'SESSION_EVENT', payload: { type: 'copy',  t: performance.now() } });
     }, { passive: true });
@@ -203,28 +180,18 @@ class CrustSDK {
   private onWorkerMessage(event: MessageEvent<WorkerOutboundMessage>): void {
     const msg = event.data;
     if (this.config.debug) console.log('[CRUST]', msg.type, msg);
-
     switch (msg.type) {
       case 'ENV_READY':
-        // Environment features collected within 800 ms spec requirement
         if (this.config.debug) console.log('[CRUST] Environment features ready');
         break;
-
       case 'FEATURES_READY': {
-        const pending = this.pendingExtract.get(msg.id);
-        if (pending) {
-          this.pendingExtract.delete(msg.id);
-          pending.resolve(msg.payload);
-        }
+        const p = this.pendingExtract.get(msg.id);
+        if (p) { this.pendingExtract.delete(msg.id); p.resolve(msg.payload); }
         break;
       }
-
       case 'FEATURES_ERROR': {
-        const pending = this.pendingExtract.get(msg.id);
-        if (pending) {
-          this.pendingExtract.delete(msg.id);
-          pending.reject(new Error(msg.error));
-        }
+        const p = this.pendingExtract.get(msg.id);
+        if (p) { this.pendingExtract.delete(msg.id); p.reject(new Error(msg.error)); }
         break;
       }
     }
@@ -233,96 +200,68 @@ class CrustSDK {
   // ── Public: protect() ─────────────────────────────────────────────────────
 
   async protect(actionName: string): Promise<string> {
-    // Return in-memory cached JWT if still within its TTL
     if (this.cachedJwt !== null) {
-      if (!isJwtExpired(this.cachedJwt)) {
-        if (this.config.debug) console.log('[CRUST] Returning cached JWT');
-        return this.cachedJwt;
-      }
-      // Cache expired — clear and re-collect
+      if (!isJwtExpired(this.cachedJwt)) return this.cachedJwt;
       this.cachedJwt = null;
-      if (this.config.debug) console.log('[CRUST] Cached JWT expired; re-collecting features');
     }
 
     const featureVector = await this.extractFeatures();
 
-    const verifyRes = await fetchWithRetry(
-      `${this.config.apiBase}/verify`,
-      {
-        method:  'POST',
-        headers: {
-          'Content-Type':   'application/json',
-          'x-crust-action': actionName,
-        },
-        body:        JSON.stringify({ feature_vector: featureVector }),
-        credentials: 'omit',
-      },
-    );
+    const verifyRes = await fetchWithRetry(`${this.config.apiBase}/verify`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'x-crust-action': actionName },
+      body:    JSON.stringify({ feature_vector: featureVector }),
+      credentials: 'omit',
+    });
 
     const verifyBody = (await verifyRes.json()) as CrustResponse;
     if (this.config.debug) console.log('[CRUST] /verify →', verifyBody.decision, verifyBody.confidence);
-
     return this.handleDecision(verifyBody);
+  }
+
+  // ── Public: getStatus() ───────────────────────────────────────────────────
+
+  getStatus(): { confidence: number | null; decision: string | null } {
+    if (!this.cachedJwt) return { confidence: null, decision: null };
+    try {
+      const p = decodeJwtPayload(this.cachedJwt);
+      return { confidence: p.confidence, decision: p.decision as string };
+    } catch {
+      return { confidence: null, decision: null };
+    }
   }
 
   // ── Decision routing ───────────────────────────────────────────────────────
 
   private async handleDecision(resp: CrustResponse): Promise<string> {
     switch (resp.decision) {
-
       case DecisionEnum.PASS:
         this.cachedJwt = resp.jwt;
         return resp.jwt;
 
       case DecisionEnum.SOFT_CHALLENGE: {
-        // Fetch a pizza order from the server
-        const orderRes = await fetchWithRetry(
-          `${this.config.apiBase}/challenge/order`,
-          {
-            method:  'POST',
-            headers: { Authorization: `Bearer ${resp.jwt}` },
-          },
-        );
-        const order = (await orderRes.json()) as {
-          order_id: string;
-          base:     string;
-          sauce:    string;
-          toppings: string[];
+        const orderRes = await fetchWithRetry(`${this.config.apiBase}/challenge/order`, {
+          method: 'POST', headers: { Authorization: `Bearer ${resp.jwt}` },
+        });
+        const order = await orderRes.json() as {
+          order_id: string; base: string; sauce: string; toppings: string[];
         };
-
-        // Phase 1: toppings stub — Phase 3 will swap in the real UI component
-        const toppingsResult = await runToppingsChallenge(order.order_id, resp.jwt);
-
-        // Build named game_signals object from the ordered tuple
+        const result = await runToppingsChallenge(order.order_id, resp.jwt);
         const gameSignals: Record<string, number> = {};
         for (let i = 0; i < GAME_SIGNAL_KEYS.length; i++) {
-          const key = GAME_SIGNAL_KEYS[i] as string;
-          gameSignals[key] = toppingsResult.gameSignals[i] ?? 0;
+          gameSignals[GAME_SIGNAL_KEYS[i] as string] = result.gameSignals[i] ?? 0;
         }
-
-        const challengeRes = await fetchWithRetry(
-          `${this.config.apiBase}/challenge/result`,
-          {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              jwt:       resp.jwt,
-              order_id:  toppingsResult.orderId,
-              submitted: toppingsResult.submitted,
-              game_signals: gameSignals,
-            }),
-          },
-        );
-        const challengeBody = (await challengeRes.json()) as CrustResponse;
-        if (this.config.debug) {
-          console.log('[CRUST] /challenge/result →', challengeBody.decision, challengeBody.confidence);
-        }
-        // Recurse once — prevents infinite SOFT_CHALLENGE loops
-        return this.handleDecision(challengeBody);
+        const challengeRes = await fetchWithRetry(`${this.config.apiBase}/challenge/result`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jwt: resp.jwt, order_id: result.orderId,
+            submitted: result.submitted, game_signals: gameSignals,
+          }),
+        });
+        return this.handleDecision(await challengeRes.json() as CrustResponse);
       }
 
       case DecisionEnum.HARD_CHALLENGE:
-        // Phase 1: surface to the caller; Phase 2 will implement the full flow
         throw new Error('CRUST_HARD_CHALLENGE');
 
       case DecisionEnum.BLOCK:
@@ -333,34 +272,34 @@ class CrustSDK {
     }
   }
 
-  // ── Feature extraction promise ─────────────────────────────────────────────
+  // ── Feature extraction ────────────────────────────────────────────────────
 
   private extractFeatures(): Promise<FeatureVector> {
+    // No worker → return a synthetic vector so the flow still works
+    if (!this.worker) {
+      if (this.config.debug) console.warn('[CRUST] No worker — using synthetic feature vector');
+      return Promise.resolve(
+        Array.from({ length: 40 }, Math.random) as unknown as FeatureVector
+      );
+    }
     return new Promise<FeatureVector>((resolve, reject) => {
       const id = `fv-${++this.reqSeq}-${Date.now()}`;
-
-      // Timeout: collection window + generous network buffer
-      const timeoutMs = this.config.collectionWindowMs + 8_000;
       const timer = setTimeout(() => {
         if (this.pendingExtract.has(id)) {
           this.pendingExtract.delete(id);
           reject(new Error('CRUST_FEATURE_EXTRACTION_TIMEOUT'));
         }
-      }, timeoutMs);
-
+      }, this.config.collectionWindowMs + 8_000);
       this.pendingExtract.set(id, {
-        resolve: (v) => { clearTimeout(timer); resolve(v); },
-        reject:  (e) => { clearTimeout(timer); reject(e);  },
+        resolve: v => { clearTimeout(timer); resolve(v); },
+        reject:  e => { clearTimeout(timer); reject(e);  },
       });
-
       this.postToWorker({ type: 'EXTRACT_FEATURES', id });
     });
   }
 
-  // ── Typed worker postMessage ───────────────────────────────────────────────
-
   private postToWorker(msg: WorkerInboundMessage): void {
-    this.worker.postMessage(msg);
+    this.worker?.postMessage(msg);
   }
 }
 
@@ -368,26 +307,18 @@ class CrustSDK {
 
 declare global {
   interface Window {
-    /** CRUST public API — populated by initCrust() */
     CRUST: {
-      protect: (actionName: string) => Promise<string>;
-      config:  Readonly<CrustConfig>;
+      protect:   (actionName: string) => Promise<string>;
+      getStatus: () => { confidence: number | null; decision: string | null };
+      config:    Readonly<CrustConfig>;
+      init:      (config?: Partial<CrustConfig>) => void;
     };
-    /** Optional pre-load configuration object set before crust.js loads */
     CRUSTConfig?: Partial<CrustConfig>;
   }
 }
 
 let _instance: CrustSDK | null = null;
 
-/**
- * initCrust
- *
- * Initialise the CRUST SDK with optional configuration overrides and expose
- * `window.CRUST`.  Safe to call multiple times — subsequent calls are no-ops.
- *
- * @param config  Partial config merged over `DEFAULT_CONFIG`
- */
 export function initCrust(config: Partial<CrustConfig> = {}): void {
   if (_instance !== null) {
     console.warn('[CRUST] Already initialised — ignoring duplicate initCrust() call');
@@ -395,13 +326,15 @@ export function initCrust(config: Partial<CrustConfig> = {}): void {
   }
   _instance = new CrustSDK(config);
   window.CRUST = {
-    protect: (actionName: string) => _instance!.protect(actionName),
-    config:  _instance.config,
+    protect:   actionName => _instance!.protect(actionName),
+    getStatus: ()         => _instance!.getStatus(),
+    config:    _instance.config,
+    init:      ()         => { /* no-op after first init */ },
   };
+  if (_instance.config.debug) console.log('[CRUST] SDK ready', _instance.config);
 }
 
-// Auto-initialise when loaded via <script> tag.
-// Consumers may pre-configure via `window.CRUSTConfig = { … }` before the tag.
+// Auto-initialise when loaded via <script> tag
 if (typeof window !== 'undefined' && typeof window.CRUST === 'undefined') {
   initCrust(window.CRUSTConfig ?? {});
 }

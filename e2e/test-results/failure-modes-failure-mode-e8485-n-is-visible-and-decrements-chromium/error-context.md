@@ -19,7 +19,7 @@
           - /placeholder: Enter password
           - text: pass
       - alert [ref=e15]: Verification failed. Please try again.
-      - button "Try again" [active] [ref=e16] [cursor=pointer]
+      - button "Try again" [ref=e16] [cursor=pointer]
     - paragraph [ref=e17]:
       - link "Go to Checkout demo →" [ref=e18] [cursor=pointer]:
         - /url: /checkout

@@ -28,9 +28,9 @@ export default defineConfig({
     },
   ],
 
-  // Start the demo-app dev server before tests if not already running
+  // Start the demo-app server before tests if not already running
   webServer: {
-    command:            'npm run dev:server',
+    command:            'npm start',
     cwd:                '../demo-app',
     url:                'http://localhost:3000/health',
     reuseExistingServer: !process.env.CI,
