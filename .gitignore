@@ -28,3 +28,8 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .mypy_cache/
+
+# Secrets
+crust_private.pem
+*.pem
+*.key
