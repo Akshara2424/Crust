@@ -1,0 +1,21 @@
+{
+  "name": "crust-sdk",
+  "version": "0.1.0",
+  "description": "CRUST passive human verification SDK",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build":        "npm run build:worker && npm run build:sdk",
+    "build:worker": "esbuild src/worker.ts --bundle --format=iife --outfile=dist/crust.worker.js --sourcemap",
+    "build:sdk":    "esbuild src/index.ts --bundle --format=iife --outfile=dist/crust.iife.js --sourcemap --define:WORKER_URL='\"/dist/crust.worker.js\"'",
+    "build:watch":  "npm run build:worker && esbuild src/index.ts --bundle --format=iife --outfile=dist/crust.iife.js --sourcemap --define:WORKER_URL='\"/dist/crust.worker.js\"' --watch",
+    "dev":          "node dev-server.js",
+    "start":        "npm run build && node dev-server.js",
+    "typecheck":    "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild":    "^0.21.5",
+    "typescript": "^5.4.5"
+  }
+}

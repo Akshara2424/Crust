@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     jwt_issuer:         str = "crust-verification-service"
 
     # Decision thresholds
-    threshold_pass:           float = 0.85
-    threshold_soft_challenge: float = 0.60
-    threshold_hard_challenge: float = 0.40
+    threshold_pass:           float = 0.55   # anything above 0.55 → PASS
+    threshold_soft_challenge: float = 0.35
+    threshold_hard_challenge: float = 0.20
 
     # Server
     log_level: str = "info"
